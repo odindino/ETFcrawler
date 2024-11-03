@@ -38,9 +38,9 @@ This program scrapes ETF information from MoneyDJ financial website, including:
     - datetime
     - typing
 
-作者 (Author): [Your Name]
+作者 (Author): Zi-Liang Yang
 版本 (Version): 1.0.0
-日期 (Date): 2024-02
+日期 (Date): 2024-11-04
 """
 
 import requests
