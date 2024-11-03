@@ -577,52 +577,219 @@ class ETFScraper:
             'return_trends': self.get_return_trends(etf_code)
         }
 
+    def _parse_price(self, text: str) -> Optional[float]:
+        """
+        解析價格值（去除日期等額外資訊）
+        Parse price value (remove date and other extra information)
 
-# 使用範例 (Usage Example)
+        Args:
+            text (str): 包含價格的文字，可能包含日期 (Text containing price, may include date)
+                    例如：'12.34 (2024/02/14)' or '12.34（2024/02/14）'
+
+        Returns:
+            Optional[float]: 解析後的價格數值 (Parsed price value)
+        """
+        try:
+            # 移除所有括號內的內容
+            value = re.sub(r'[\(（].*?[\)）]', '', str(text))
+            value = value.replace(',', '').strip()
+            if value and value != '-':
+                return float(value)
+            return None
+        except (ValueError, AttributeError):
+            return None
+
+    def compare_etfs(self, etf_codes: List[str]) -> Dict[str, pd.DataFrame]:
+        """
+        比較多個ETF的關鍵指標
+        Compare key indicators of multiple ETFs
+
+        Args:
+            etf_codes (List[str]): ETF代碼列表，例如 ['00770.TW', '00830.TW', 'QQQM']
+                                List of ETF codes, e.g., ['00770.TW', '00830.TW', 'QQQM']
+
+        Returns:
+            Dict[str, pd.DataFrame]: 包含以下比較表的字典 Dictionary containing following comparison tables:
+                - basic_metrics: 基本指標比較 (Basic metrics comparison)
+                - returns: 報酬率比較 (Return comparison)
+                - peer_comparison: 同類型比較 (Peer comparison)
+        """
+        # 儲存所有ETF的資料
+        all_data = {}
+        for etf_code in etf_codes:
+            try:
+                data = self.get_all_data(etf_code)
+                # 確保基本資訊存在
+                if 'basic_info' not in data:
+                    print(f"No basic info for {etf_code}")
+                    continue
+                all_data[etf_code] = data
+            except Exception as e:
+                print(f"Error getting data for {etf_code}: {e}")
+                continue
+
+        # 1. 基本指標比較表
+        basic_metrics_data = []
+        for etf_code, data in all_data.items():
+            basic_info = data['basic_info']
+            risk_analysis = data.get('risk_analysis', {})
+
+            # 從報酬比較表中獲取Sharpe值
+            sharpe = None
+            if 'return_comparison' in data:
+                comp_df = data['return_comparison'].get('comparison')
+                if comp_df is not None and not comp_df.empty:
+                    try:
+                        sharpe = comp_df.iloc[0].get('Sharpe')
+                    except:
+                        pass
+
+            metrics = {
+                'ETF代碼': etf_code,
+                'ETF名稱': basic_info.get('ETF名稱', ''),  # 記錄各ETF的名稱
+                'ETF市價': self._parse_price(basic_info.get('ETF市價', '')),
+                'ETF淨值': self._parse_price(basic_info.get('ETF淨值', '')),
+                '殖利率(%)': self._parse_percentage(basic_info.get('殖利率(%)', '')),
+                '總管理費用(%)': self._parse_percentage(basic_info.get('總管理費用(%)', '')),
+                '年化標準差(%)': self._parse_percentage(basic_info.get('年化標準差(%)', '')),
+                'Sharpe值': sharpe
+            }
+            basic_metrics_data.append(metrics)
+
+        basic_metrics_df = pd.DataFrame(basic_metrics_data)
+
+        # 2. 報酬率比較表
+        returns_data = []
+        for etf_code, data in all_data.items():
+            if 'return_comparison' in data and 'monthly' in data['return_comparison']:
+                monthly_df = data['return_comparison']['monthly']
+                if not monthly_df.empty:
+                    etf_row = monthly_df.iloc[0]  # ETF自身的報酬率
+                    returns = {
+                        'ETF代碼': etf_code,
+                        # 使用對應ETF的名稱
+                        'ETF名稱': all_data[etf_code]['basic_info'].get('ETF名稱', ''),
+                        '今年起': etf_row.get('今年起'),
+                        '一個月': etf_row.get('一個月'),
+                        '三個月': etf_row.get('三個月'),
+                        '六個月': etf_row.get('六個月'),
+                        '一年': etf_row.get('一年'),
+                        '二年': etf_row.get('二年'),
+                        '三年': etf_row.get('三年')
+                    }
+                    returns_data.append(returns)
+
+        returns_df = pd.DataFrame(returns_data)
+
+        # 3. 同類型比較表
+        peer_comparison_data = []
+        for etf_code, data in all_data.items():
+            if 'return_comparison' in data and 'monthly' in data['return_comparison']:
+                monthly_df = data['return_comparison']['monthly']
+                if not monthly_df.empty and len(monthly_df) > 1:
+                    etf_row = monthly_df.iloc[0]  # ETF自身的報酬率
+                    peer_row = monthly_df.iloc[1]  # 同類型平均
+                    rank_row = monthly_df.iloc[2]  # 同類型排名
+                    etf_name = all_data[etf_code]['basic_info'].get(
+                        'ETF名稱', '')  # 使用對應ETF的名稱
+
+                    for period in ['今年起', '一個月', '三個月', '六個月', '一年', '二年', '三年']:
+                        if period in etf_row and period in peer_row and period in rank_row:
+                            comparison = {
+                                'ETF代碼': etf_code,
+                                'ETF名稱': etf_name,
+                                '期間': period,
+                                'ETF報酬率': etf_row.get(period),
+                                '同類型平均': peer_row.get(period),
+                                '同類型排名': rank_row.get(period)
+                            }
+                            peer_comparison_data.append(comparison)
+
+        peer_comparison_df = pd.DataFrame(peer_comparison_data)
+
+        return {
+            'basic_metrics': basic_metrics_df,
+            'returns': returns_df,
+            'peer_comparison': peer_comparison_df
+        }
+
+
+# # 使用範例 (Usage Example)
+# if __name__ == "__main__":
+#     # 建立爬蟲器實例 (Create scraper instance)
+#     scraper = ETFScraper()
+
+#     # 指定要查詢的ETF代碼 (Specify ETF code to query)
+#     etf_code = 'VT'
+
+#     # 獲取所有數據 (Get all data)
+#     data = scraper.get_all_data(etf_code)
+
+#     # 顯示基本資訊 (Display basic information)
+#     print("\n基本資訊 (Basic Information):")
+#     print(pd.DataFrame([data['basic_info']]))
+
+#     # 顯示持股資訊 (Display holdings information)
+#     print("\n持股資訊 (Holdings Information):")
+#     holdings = data.get('holdings', {})
+#     for holding_type in ['holdings_by_region', 'holdings_by_sector', 'top_holdings']:
+#         df = holdings.get(holding_type)
+#         if df is not None and not df.empty:
+#             print(f"\n{holding_type}:")
+#             print(df)
+#         else:
+#             print(f"\n{holding_type}: 無資料 (No data)")
+
+#     # 顯示風險分析 (Display risk analysis)
+#     print("\n風險分析 (Risk Analysis):")
+#     print(pd.DataFrame(data['risk_analysis']).T)
+
+#     # 顯示報酬比較 (Display return comparison)
+#     print("\n報酬比較 (Return Comparison):")
+#     if 'comparison' in data['return_comparison']:
+#         print(data['return_comparison']['comparison'])
+
+#     # 顯示月份報酬比較 (Display monthly return comparison)
+#     print("\n月份報酬比較 (Monthly Return Comparison):")
+#     if 'monthly' in data['return_comparison']:
+#         print(data['return_comparison']['monthly'])
+
+#     # 顯示報酬走勢 (Display return trends)
+#     print("\n報酬走勢 (Return Trends):")
+#     print("月報酬率 (Monthly Returns):")
+#     print(data['return_trends']['monthly_return'])
+#     print("\n季報酬率 (Quarterly Returns):")
+#     print(data['return_trends']['quarterly_return'])
+#     print("\n年報酬率 (Yearly Returns):")
+#     print(data['return_trends']['yearly_return'])
+
+# 使用示例 (Usage Example)
 if __name__ == "__main__":
-    # 建立爬蟲器實例 (Create scraper instance)
     scraper = ETFScraper()
 
-    # 指定要查詢的ETF代碼 (Specify ETF code to query)
-    etf_code = 'VT'
+    # 指定要比較的ETF代碼
+    etf_codes = ['00770.TW', '00830.TW', '00909.TW', 'QQQM']
 
-    # 獲取所有數據 (Get all data)
-    data = scraper.get_all_data(etf_code)
+    # 獲取比較數據
+    comparison_data = scraper.compare_etfs(etf_codes)
 
-    # 顯示基本資訊 (Display basic information)
-    print("\n基本資訊 (Basic Information):")
-    print(pd.DataFrame([data['basic_info']]))
+    # 顯示基本指標比較
+    print("\n基本指標比較 (Basic Metrics Comparison):")
+    print(comparison_data['basic_metrics'].to_string())
 
-    # 顯示持股資訊 (Display holdings information)
-    print("\n持股資訊 (Holdings Information):")
-    holdings = data.get('holdings', {})
-    for holding_type in ['holdings_by_region', 'holdings_by_sector', 'top_holdings']:
-        df = holdings.get(holding_type)
-        if df is not None and not df.empty:
-            print(f"\n{holding_type}:")
-            print(df)
-        else:
-            print(f"\n{holding_type}: 無資料 (No data)")
+    # 顯示報酬率比較
+    print("\n報酬率比較 (Returns Comparison):")
+    print(comparison_data['returns'].to_string())
 
-    # 顯示風險分析 (Display risk analysis)
-    print("\n風險分析 (Risk Analysis):")
-    print(pd.DataFrame(data['risk_analysis']).T)
+    # 顯示同類型比較
+    print("\n同類型比較 (Peer Comparison):")
+    print(comparison_data['peer_comparison'].to_string())
 
-    # 顯示報酬比較 (Display return comparison)
-    print("\n報酬比較 (Return Comparison):")
-    if 'comparison' in data['return_comparison']:
-        print(data['return_comparison']['comparison'])
-
-    # 顯示月份報酬比較 (Display monthly return comparison)
-    print("\n月份報酬比較 (Monthly Return Comparison):")
-    if 'monthly' in data['return_comparison']:
-        print(data['return_comparison']['monthly'])
-
-    # 顯示報酬走勢 (Display return trends)
-    print("\n報酬走勢 (Return Trends):")
-    print("月報酬率 (Monthly Returns):")
-    print(data['return_trends']['monthly_return'])
-    print("\n季報酬率 (Quarterly Returns):")
-    print(data['return_trends']['quarterly_return'])
-    print("\n年報酬率 (Yearly Returns):")
-    print(data['return_trends']['yearly_return'])
+    # 可以使用pandas的樞紐表功能來重新組織同類型比較數據
+    peer_pivot = comparison_data['peer_comparison'].pivot(
+        index=['ETF代碼', 'ETF名稱'],
+        columns='期間',
+        values=['ETF報酬率', '同類型平均', '同類型排名']
+    )
+    print("\n同類型比較 (樞紐表格式) Peer Comparison (Pivot Format):")
+    print(peer_pivot.to_string())
