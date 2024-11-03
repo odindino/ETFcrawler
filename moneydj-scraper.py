@@ -177,7 +177,7 @@ class ETFScraper:
             print(f"Error in get_top_holdings: {e}")
             return None
 
-    def get_holdings(self, etf_code: str) -> Dict[str, pd.DataFrame]:
+    def get_holdings(self, etf_code: str) -> Dict[str, Optional[pd.DataFrame]]:
         """獲取ETF的全部持股資訊"""
         url = f"https://www.moneydj.com/ETF/X/Basic/Basic0007.xdjhtm?etfid={etf_code}"
         soup = self._get_soup(url)
@@ -187,20 +187,39 @@ class ETFScraper:
         title_texts = [title.text.strip() for title in titles]
 
         # 創建結果字典
-        result = {}
+        result = {
+            'holdings_by_region': None,
+            'holdings_by_sector': None,
+            'top_holdings': None
+        }
 
         # 根據標題決定要抓取的資訊
         for title in title_texts:
             if '依區域' in title:
-                result['holdings_by_region'] = self._get_holdings_by_region(
-                    soup)
+                df = self._get_holdings_by_region(soup)
+                if df is not None and not df.empty:
+                    result['holdings_by_region'] = df
             elif '依產業' in title:
-                result['holdings_by_sector'] = self._get_holdings_by_sector(
-                    soup)
+                df = self._get_holdings_by_sector(soup)
+                if df is not None and not df.empty:
+                    result['holdings_by_sector'] = df
             elif '持股明細' in title:
-                result['top_holdings'] = self._get_top_holdings(soup)
+                df = self._get_top_holdings(soup)
+                if df is not None and not df.empty:
+                    result['top_holdings'] = df
 
         return result
+
+    # 在使用時也要加入相應的檢查：
+    def print_holdings(holdings_data: Dict[str, Optional[pd.DataFrame]]) -> None:
+        """格式化打印持股資訊"""
+        print("\n持股分析:")
+        for category, df in holdings_data.items():
+            if df is not None and not df.empty:
+                print(f"\n{category}:")
+                print(df)
+            else:
+                print(f"\n{category}: 無資料")
 
     def get_return_trends(self, etf_code: str) -> Dict[str, pd.DataFrame]:
         """獲取報酬走勢數據"""
@@ -341,15 +360,24 @@ class ETFScraper:
 
 
 scraper = ETFScraper()
-data = scraper.get_all_data('VT')
+data = scraper.get_all_data('VOO')
 
 # 查看各部分數據
 print("\n基本資訊:")
 print(pd.DataFrame([data['basic_info']]))
 
-print("\n持股分析:")
-print(pd.DataFrame(data['holdings']['holdings_by_region']))
-print(pd.DataFrame(data['holdings']['holdings_by_sector']))
+
+# 更細緻的控制
+holdings = data.get('holdings', {})
+
+# 安全地訪問各類持股資料
+for holding_type in ['holdings_by_region', 'holdings_by_sector', 'top_holdings']:
+    df = holdings.get(holding_type)
+    if df is not None and not df.empty:
+        print(f"\n{holding_type}:")
+        print(df)
+    else:
+        print(f"\n{holding_type}: 無資料")
 
 print("\n風險分析:")
 print(pd.DataFrame(data['risk_analysis']).T)
